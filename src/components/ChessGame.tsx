@@ -3,11 +3,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { Chess } from 'chess.js';
 import axios from 'axios';
+import { useDaisysWebSocket } from '@/hooks/useDaisysWebSocket';
 
 interface Commentary {
   commentary: string;
   audioUrl?: string;
+  audioUrls?: string[];  // Multiple audio URLs for sentence-by-sentence playback
 }
+
+// Feature flag for WebSocket audio
+const USE_WEBSOCKET_AUDIO = true; // Set to true to enable WebSocket streaming
+const USE_STREAMING_COMMENTARY = true; // Enable sentence-by-sentence streaming
 
 export default function ChessGame() {
   const [Chessboard, setChessboard] = useState<any>(null);
@@ -19,6 +25,17 @@ export default function ChessGame() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const hasPlayedRef = useRef<Set<string>>(new Set());
+  const [wsStatus, setWsStatus] = useState('');
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
+  // WebSocket audio hook (only used if enabled)
+  const wsAudio = USE_WEBSOCKET_AUDIO ? useDaisysWebSocket() : null;
+  
+  useEffect(() => {
+    if (wsAudio) {
+      setWsStatus(wsAudio.isConnected ? 'Connected' : 'Connecting...');
+    }
+  }, [wsAudio?.isConnected]);
 
   useEffect(() => {
     import('react-chessboard').then((mod) => {
@@ -49,10 +66,19 @@ export default function ChessGame() {
           audioRef.current.src = nextUrl;
           await audioRef.current.play();
           setIsPlaying(true);
-        } catch (error) {
+        } catch (error: any) {
           console.error('Error playing audio:', error);
-          // Try next audio if this one fails
-          playNextAudio();
+          // If it's a NotAllowedError, we need user interaction
+          if (error.name === 'NotAllowedError') {
+            console.log('Audio playback requires user interaction');
+            // Put the URL back in the queue
+            audioQueueRef.current.unshift(nextUrl);
+            setIsPlaying(false);
+            setAudioBlocked(true);
+          } else {
+            // Try next audio if this one fails
+            playNextAudio();
+          }
         }
       }
     } else {
@@ -67,19 +93,27 @@ export default function ChessGame() {
     }
   };
 
-  const playAudioManually = async (url: string) => {
-    console.log('Manual play audio:', url);
+  const playAudioManually = async (comment: Commentary) => {
+    console.log('Manual play audio:', comment);
     if (audioRef.current) {
       try {
         // Stop current audio if playing
         if (!audioRef.current.paused) {
           audioRef.current.pause();
         }
-        // Clear the queue and play this audio immediately
+        // Clear the queue
         audioQueueRef.current = [];
-        audioRef.current.src = url;
-        await audioRef.current.play();
-        setIsPlaying(true);
+        
+        if (comment.audioUrls && comment.audioUrls.length > 0) {
+          // Add all URLs to queue
+          comment.audioUrls.forEach(url => audioQueueRef.current.push(url));
+          playNextAudio();
+        } else if (comment.audioUrl) {
+          // Play single URL
+          audioRef.current.src = comment.audioUrl;
+          await audioRef.current.play();
+          setIsPlaying(true);
+        }
       } catch (error) {
         console.error('Error playing audio manually:', error);
       }
@@ -88,30 +122,134 @@ export default function ChessGame() {
 
   const sendMoveToBackend = async (move: string, player: 'human' | 'computer') => {
     try {
-      console.log('Sending move to backend:', move, player);
+      // Send move to backend
+      
+      // Try streaming if enabled, even if WebSocket isn't ready yet
+      if (USE_STREAMING_COMMENTARY) {
+        // Use streaming endpoint for sentence-by-sentence generation
+        try {
+          const response = await fetch('/api/move-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fen: game.fen(),
+              move: move,
+              player: player,
+              moveHistory: moveHistory
+            })
+          });
+        
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let fullCommentary = '';
+          let sentences: string[] = [];
+          let commentaryStarted = false;
+          
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    
+                    if (data.type === 'sentence') {
+                      sentences.push(data.text);
+                      
+                      // Update UI progressively
+                      fullCommentary = sentences.join(' ');
+                      const newCommentary: Commentary = {
+                        commentary: fullCommentary,
+                        audioUrls: [] // No URLs needed with WebSocket
+                      };
+                      
+                      // Update the latest commentary
+                      if (!commentaryStarted) {
+                        setCommentary(prev => [newCommentary, ...prev]);
+                        commentaryStarted = true;
+                        console.log('Receiving commentary...');
+                      } else {
+                        setCommentary(prev => {
+                          const updated = [...prev];
+                          updated[0] = newCommentary;
+                          return updated;
+                        });
+                      }
+                    } else if (data.type === 'complete') {
+                      fullCommentary = data.full_commentary || fullCommentary;
+                      // Send the complete commentary to TTS at once
+                      if (USE_WEBSOCKET_AUDIO && wsAudio?.isConnected && fullCommentary) {
+                        console.log('Speaking commentary...');
+                        wsAudio.playText(fullCommentary);
+                      }
+                    } else if (data.type === 'error') {
+                      console.error('Streaming error:', data.message);
+                      throw new Error(data.message);
+                    }
+                  } catch (e) {
+                    console.error('Error parsing SSE data:', e);
+                  }
+                }
+              }
+            }
+          }
+          
+          return true;
+        } catch (error) {
+          console.error('Error in streaming:', error);
+          // Fall back to regular endpoint
+          console.log('Falling back to regular endpoint');
+        }
+      }
+      
+      // Regular endpoint (fallback or when streaming not available)
       const response = await axios.post('/api/move', {
         fen: game.fen(),
         move: move,
         player: player,
         moveHistory: moveHistory
+      }, {
+        timeout: 30000  // Increase timeout to 30 seconds
       });
 
       const newCommentary: Commentary = response.data;
       console.log('Received commentary:', newCommentary);
       setCommentary(prev => [newCommentary, ...prev]);
       
-      // Automatically play audio for new commentary
-      if (newCommentary.audioUrl && !hasPlayedRef.current.has(newCommentary.audioUrl)) {
-        console.log('Auto-playing new audio:', newCommentary.audioUrl);
+      if (USE_WEBSOCKET_AUDIO && wsAudio?.isConnected) {
+        // Use WebSocket streaming for full text
+        console.log('Streaming audio via WebSocket for text:', newCommentary.commentary);
+        wsAudio.playText(newCommentary.commentary);
+      } else if (newCommentary.audioUrls && newCommentary.audioUrls.length > 0) {
+        // Play multiple audio URLs in sequence
+        newCommentary.audioUrls.forEach((url, index) => {
+          if (!hasPlayedRef.current.has(url)) {
+            hasPlayedRef.current.add(url);
+            addAudioToQueue(url);
+          }
+        });
+      } else if (newCommentary.audioUrl && !hasPlayedRef.current.has(newCommentary.audioUrl)) {
+        // Use single audio URL
         hasPlayedRef.current.add(newCommentary.audioUrl);
         addAudioToQueue(newCommentary.audioUrl);
       }
       
-      return true; // Success
+      return true;
     } catch (error: any) {
       console.error('Error getting commentary:', error);
       console.error('Error details:', error.response?.data || error.message);
-      return false; // Failed
+      return false;
     }
   };
 
@@ -132,9 +270,16 @@ export default function ChessGame() {
   };
 
   function onDrop(sourceSquare: string, targetSquare: string, piece?: string) {
-    console.log('onDrop called - params:', { sourceSquare, targetSquare, piece });
-    console.log('Current FEN:', game.fen());
-    console.log('Is thinking:', isThinking);
+    // Removed verbose logging
+    
+    // This is a user interaction, so we can now safely play audio
+    if (audioBlocked) {
+      setAudioBlocked(false);
+      if (audioRef.current && audioRef.current.paused && audioQueueRef.current.length > 0) {
+        console.log('User interaction detected, attempting to play queued audio');
+        playNextAudio();
+      }
+    }
     
     if (isThinking) {
       console.log('Blocked: Computer is thinking');
@@ -149,15 +294,14 @@ export default function ChessGame() {
         promotion: 'q',
       });
 
-      console.log('Move result:', move);
+      // Move validation
 
       if (move === null) {
         console.log('Invalid move');
         return false;
       }
 
-      console.log('Valid move:', move.san);
-      console.log('New FEN:', gameCopy.fen());
+      // Move accepted
       
       setGame(gameCopy);
       setMoveHistory(prev => [...prev, move.san]);
@@ -165,20 +309,49 @@ export default function ChessGame() {
       // Send move to backend and wait for commentary before computer moves
       if (!gameCopy.isGameOver()) {
         setIsThinking(true);
-        sendMoveToBackend(move.san, 'human').then((success) => {
-          if (success) {
-            // Wait a bit after commentary is received before computer moves
+        
+        // Start commentary request
+        const commentaryPromise = sendMoveToBackend(move.san, 'human');
+        
+        // Set minimum delay before computer moves (for better UX)
+        const minDelay = 500;
+        const startTime = Date.now();
+        
+        commentaryPromise.then((success) => {
+          const elapsed = Date.now() - startTime;
+          const remainingDelay = Math.max(0, minDelay - elapsed);
+          
+          // Function to make computer move when ready
+          const doComputerMove = () => {
+            makeComputerMove(gameCopy);
+            setIsThinking(false);
+          };
+          
+          // If using WebSocket audio, wait for it to finish
+          if (USE_WEBSOCKET_AUDIO && wsAudio?.isPlaying) {
+            console.log('Waiting for audio to finish...');
+            const checkInterval = setInterval(() => {
+              if (!wsAudio.isPlaying) {
+                clearInterval(checkInterval);
+                setTimeout(doComputerMove, 500); // Small delay after audio
+              }
+            }, 100);
+            
+            // Timeout after 10 seconds in case something goes wrong
             setTimeout(() => {
-              makeComputerMove(gameCopy);
-              setIsThinking(false);
-            }, 1000);
+              clearInterval(checkInterval);
+              if (isThinking) {
+                doComputerMove();
+              }
+            }, 10000);
           } else {
-            // If commentary failed, still let computer move
-            setTimeout(() => {
-              makeComputerMove(gameCopy);
-              setIsThinking(false);
-            }, 500);
+            // No audio playing, use standard delay
+            setTimeout(doComputerMove, remainingDelay);
           }
+        }).catch(() => {
+          // If commentary failed, still let computer move
+          makeComputerMove(gameCopy);
+          setIsThinking(false);
         });
       } else {
         // Game is over, just send the final move
@@ -240,15 +413,28 @@ export default function ChessGame() {
             New Game
           </button>
           {isThinking && (
-            <div className="px-6 py-3 text-amber-700 font-semibold">
+            <div className="px-6 py-3 text-amber-700 font-semibold flex items-center gap-2">
+              <div className="animate-spin h-4 w-4 border-2 border-amber-700 border-t-transparent rounded-full"></div>
               Computer thinking...
+            </div>
+          )}
+          {audioBlocked && (
+            <div className="px-6 py-3 text-amber-600 font-semibold animate-pulse">
+              🔇 Make a move to enable audio
             </div>
           )}
         </div>
       </div>
 
       <div className="bg-amber-100 p-6 rounded-lg shadow-2xl">
-        <h2 className="text-2xl font-bold mb-4 text-amber-900">Commentary</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-2xl font-bold text-amber-900">Commentary</h2>
+          {USE_WEBSOCKET_AUDIO && (
+            <span className="text-sm text-amber-700">
+              WebSocket: {wsStatus}
+            </span>
+          )}
+        </div>
         <div className="h-[600px] overflow-y-auto space-y-3">
           {commentary.length === 0 ? (
             <p className="text-amber-700 italic p-4">Make a move to hear the roast...</p>
@@ -266,9 +452,9 @@ export default function ChessGame() {
                   }}
                 >
                   <p className="text-amber-900 italic">{comment.commentary}</p>
-                  {comment.audioUrl && (
+                  {(comment.audioUrl || comment.audioUrls) && (
                     <button 
-                      onClick={() => playAudioManually(comment.audioUrl!)}
+                      onClick={() => playAudioManually(comment)}
                       className="text-xs text-amber-600 hover:text-amber-800 mt-2 transition-colors"
                     >
                       🔊 Play Audio
