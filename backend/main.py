@@ -32,11 +32,11 @@ DAISYS_VOICE_ID = os.getenv("DAISYS_VOICE_ID")
 daisys_client = None
 if DAISYS_EMAIL and DAISYS_PASSWORD:
     try:
+        # Create the client but don't enter context yet
         daisys_client = DaisysAPI('speak', email=DAISYS_EMAIL, password=DAISYS_PASSWORD)
-        daisys_client.__enter__()  # Enter the context manager
-        print("Daisys API client initialized successfully")
+        print("Daisys API client created successfully")
     except Exception as e:
-        print(f"Failed to initialize Daisys API client: {str(e)}")
+        print(f"Failed to create Daisys API client: {str(e)}")
         daisys_client = None
 
 class MoveRequest(BaseModel):
@@ -80,13 +80,23 @@ Examples of style:
         audio_url = None
         if daisys_client and DAISYS_VOICE_ID:
             try:
-                take = daisys_client.generate_take(
-                    voice_id=DAISYS_VOICE_ID,
-                    text=commentary
-                )
-                audio_url = f"https://app.daisys.app/api/takes/{take.take_id}/wav"
+                with daisys_client as speak:
+                    # Generate take without waiting
+                    take = speak.generate_take(
+                        voice_id=DAISYS_VOICE_ID,
+                        text=commentary,
+                        wait=True
+                    )
+                    print(f"Generated TTS take: {take.take_id}")
+                    #await asyncio.sleep(1)
+                    
+                    # Get the audio URL
+                    audio_url = speak.get_take_audio_url(take.take_id)
+                    print(f"Audio URL: {audio_url}")
             except Exception as e:
                 print(f"Error generating TTS: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 # Continue without audio if TTS fails
         
         return CommentaryResponse(
@@ -112,15 +122,7 @@ else:
     async def serve_spa(full_path: str):
         return {"message": "Frontend not built. Run npm run build and export."}
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    global daisys_client
-    if daisys_client:
-        try:
-            daisys_client.__exit__(None, None, None)
-            print("Daisys API client closed")
-        except Exception as e:
-            print(f"Error closing Daisys client: {str(e)}")
+# Shutdown event removed - using context manager per request instead
 
 if __name__ == "__main__":
     import uvicorn

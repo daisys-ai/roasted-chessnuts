@@ -1,21 +1,26 @@
 'use client';
 
-import { useState } from 'react';
-import dynamic from 'next/dynamic';
-
-// Dynamic import for client-side only
-const Chessboard = dynamic(
-  () => import('react-chessboard').then((mod) => mod.Chessboard),
-  { ssr: false }
-) as any;
+import { useState, useEffect } from 'react';
 
 export default function SimpleChessTest() {
+  const [Chessboard, setChessboard] = useState<any>(null);
   const [fen, setFen] = useState('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+
+  useEffect(() => {
+    import('react-chessboard').then((mod) => {
+      console.log('Loaded react-chessboard:', mod);
+      setChessboard(() => mod.Chessboard);
+    });
+  }, []);
 
   function onDrop(sourceSquare: string, targetSquare: string) {
     console.log('Simple test - onDrop called:', sourceSquare, targetSquare);
     // For testing, just return true
     return true;
+  }
+
+  if (!Chessboard) {
+    return <div>Loading chess board...</div>;
   }
 
   return (
@@ -25,6 +30,7 @@ export default function SimpleChessTest() {
         <Chessboard 
           position={fen}
           onPieceDrop={onDrop}
+          arePiecesDraggable={true}
         />
       </div>
       <button 
