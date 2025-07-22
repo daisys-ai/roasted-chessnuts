@@ -81,10 +81,10 @@ async def process_move(move_request: MoveRequest):
             response = await litellm.acompletion(
                 model=os.getenv("LLM_MODEL", "gpt-3.5-turbo-0125"),  # Latest GPT-3.5 model
                 messages=[
-                    {"role": "system", "content": "Roast this chess move in EXACTLY 2 complete sentences. Be savage and sarcastic. Never start with 'Well, well, well' or similar phrases. Get straight to the roast. Make sure both sentences are complete with proper punctuation."},
+                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage. No pleasantries."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=60,  # Enough for 2 complete sentences
+                max_tokens=25,  # Enough for 2 complete sentences
                 temperature=0.8,  # Slightly higher for more variety
                 stream=True,  # Enable streaming
                 timeout=10.0  # Increase timeout
@@ -267,10 +267,10 @@ async def process_move_stream(move_request: MoveRequest):
             response = await litellm.acompletion(
                 model=os.getenv("LLM_MODEL", "gpt-3.5-turbo-0125"),
                 messages=[
-                    {"role": "system", "content": "Roast this chess move in EXACTLY 2 complete sentences. Be savage and sarcastic. Never start with 'Well, well, well' or similar phrases. Get straight to the roast. Make sure both sentences are complete with proper punctuation."},
+                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage. No pleasantries."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=60,
+                max_tokens=25,
                 temperature=0.8,
                 stream=True,
                 timeout=5.0

@@ -72,11 +72,11 @@ class ChunkOrderer {
           (this.audioPlayer.buffer.length / (this.audioPlayer.audioContext?.sampleRate || 44100)) * 1000 : 
           2000;
         
-        // Wait for audio to finish playing plus a small gap
+        // Wait for audio to finish playing plus a half second gap
         setTimeout(() => {
           this.nextGlobalId++;
           this.processChunks(); // Process next batch
-        }, estimatedDuration + 200); // Add 200ms gap between messages
+        }, estimatedDuration + 500); // Add 500ms (0.5 second) gap between messages
         
         break; // Exit the while loop, we'll continue after timeout
       } else if (!processed && this.completedRequests.has(this.nextGlobalId)) {
@@ -107,6 +107,8 @@ export function useDaisysWebSocket() {
   const audioPlayerRef = useRef<any>(null);
   const chunkOrdererRef = useRef<ChunkOrderer | null>(null);
   const activeRequestsRef = useRef<Set<number>>(new Set());
+  const onAudioStartRef = useRef<(() => void) | null>(null);
+  const onAudioEndRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     // Dynamically import Daisys modules
@@ -163,11 +165,15 @@ export function useDaisysWebSocket() {
     };
   }, []);
 
-  const playText = useCallback(async (text: string) => {
+  const playText = useCallback(async (text: string, onStart?: () => void, onEnd?: () => void) => {
     if (!wsRef.current || !isConnected || !chunkOrdererRef.current) {
       console.error('WebSocket not ready - please wait for connection');
       return;
     }
+    
+    // Store callbacks for this request
+    if (onStart) onAudioStartRef.current = onStart;
+    if (onEnd) onAudioEndRef.current = onEnd;
 
     // Use global counter for request ID
     const requestId = globalRequestCounter++;
@@ -203,6 +209,7 @@ export function useDaisysWebSocket() {
       setIsPlaying(true);
       
       try {
+        let firstChunk = true;
         // Process the stream
         for await (const [info, prefix, audio] of messageStream) {
           // Handle status messages
@@ -214,6 +221,14 @@ export function useDaisysWebSocket() {
           }
           // Handle audio chunks
           else if (prefix && audio) {
+            // Call onStart callback on first chunk
+            if (firstChunk && onAudioStartRef.current) {
+              console.log('First audio chunk received, calling onStart');
+              onAudioStartRef.current();
+              onAudioStartRef.current = null; // Clear after calling
+              firstChunk = false;
+            }
+            
             // Add chunk to orderer
             chunkOrdererRef.current.addChunk(prefix, audio, globalId);
           }
@@ -233,12 +248,23 @@ export function useDaisysWebSocket() {
       
       // If no more active requests, we're done playing
       if (activeRequestsRef.current.size === 0) {
-        // Let the audio finish playing out naturally
+        // Calculate duration and call onEnd callback
+        const audioPlayer = audioPlayerRef.current;
+        const estimatedDuration = audioPlayer?.buffer ? 
+          (audioPlayer.buffer.length / (audioPlayer.audioContext?.sampleRate || 44100)) * 1000 : 
+          2000;
+        
         setTimeout(() => {
           if (activeRequestsRef.current.size === 0) {
             setIsPlaying(false);
+            // Call onEnd callback when audio finishes
+            if (onAudioEndRef.current) {
+              console.log('Audio playback complete, calling onEnd');
+              onAudioEndRef.current();
+              onAudioEndRef.current = null;
+            }
           }
-        }, 2000);
+        }, estimatedDuration + 500); // Add buffer time
       }
       
     } catch (error) {

@@ -21,19 +21,21 @@ export default function ChessGame() {
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<Commentary[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const isThinkingRef = useRef(false);
   const audioQueueRef = useRef<string[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const hasPlayedRef = useRef<Set<string>>(new Set());
   const [wsStatus, setWsStatus] = useState('');
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const pendingCommentaryRef = useRef<Commentary | null>(null);
 
   // WebSocket audio hook (only used if enabled)
   const wsAudio = USE_WEBSOCKET_AUDIO ? useDaisysWebSocket() : null;
   
   useEffect(() => {
     if (wsAudio) {
-      setWsStatus(wsAudio.isConnected ? 'Connected' : 'Connecting...');
+      setWsStatus(wsAudio.isConnected ? '✅ Connected' : '🔌 Connecting...');
     }
   }, [wsAudio?.isConnected]);
 
@@ -174,24 +176,36 @@ export default function ChessGame() {
                         audioUrls: [] // No URLs needed with WebSocket
                       };
                       
-                      // Update the latest commentary
+                      // Store commentary but don't display yet
                       if (!commentaryStarted) {
-                        setCommentary(prev => [newCommentary, ...prev]);
+                        pendingCommentaryRef.current = newCommentary;
                         commentaryStarted = true;
-                        console.log('Receiving commentary...');
+                        console.log('Receiving commentary (waiting for audio)...', newCommentary);
                       } else {
-                        setCommentary(prev => {
-                          const updated = [...prev];
-                          updated[0] = newCommentary;
-                          return updated;
-                        });
+                        pendingCommentaryRef.current = newCommentary;
                       }
                     } else if (data.type === 'complete') {
                       fullCommentary = data.full_commentary || fullCommentary;
                       // Send the complete commentary to TTS at once
                       if (USE_WEBSOCKET_AUDIO && wsAudio?.isConnected && fullCommentary) {
                         console.log('Speaking commentary...');
-                        wsAudio.playText(fullCommentary);
+                        
+                        // Set up callbacks based on player type
+                        const onAudioStart = () => {
+                          // Show commentary when audio starts
+                          if (pendingCommentaryRef.current) {
+                            const commentary = pendingCommentaryRef.current;
+                            pendingCommentaryRef.current = null;
+                            setCommentary(prev => [commentary, ...prev]);
+                          } else {
+                            console.error('No pending commentary to display on audio start');
+                          }
+                        };
+                        
+                        const onAudioEnd = player === 'human' && (window as any).__audioEndHandler ? 
+                          (window as any).__audioEndHandler : null;
+                        
+                        wsAudio.playText(fullCommentary, onAudioStart, onAudioEnd);
                       }
                     } else if (data.type === 'error') {
                       console.error('Streaming error:', data.message);
@@ -225,7 +239,38 @@ export default function ChessGame() {
 
       const newCommentary: Commentary = response.data;
       console.log('Received commentary:', newCommentary);
-      setCommentary(prev => [newCommentary, ...prev]);
+      
+      // For non-streaming, show immediately
+      if (!USE_WEBSOCKET_AUDIO) {
+        setCommentary(prev => [newCommentary, ...prev]);
+      } else {
+        // Store pending and wait for audio
+        pendingCommentaryRef.current = newCommentary;
+        
+        // Send to TTS with callbacks
+        if (wsAudio?.isConnected) {
+          const onAudioStart = () => {
+            if (pendingCommentaryRef.current) {
+              const commentary = pendingCommentaryRef.current;
+              pendingCommentaryRef.current = null;
+              setCommentary(prev => [commentary, ...prev]);
+            }
+          };
+          
+          const onAudioEnd = player === 'human' && (window as any).__audioEndHandler ? 
+            (window as any).__audioEndHandler : null;
+          
+          if (newCommentary && newCommentary.commentary) {
+            wsAudio.playText(newCommentary.commentary, onAudioStart, onAudioEnd);
+          } else {
+            console.error('Invalid commentary response:', newCommentary);
+            // Still show the commentary even if TTS fails
+            if (newCommentary) {
+              setCommentary(prev => [newCommentary, ...prev]);
+            }
+          }
+        }
+      }
       
       if (USE_WEBSOCKET_AUDIO && wsAudio?.isConnected) {
         // Use WebSocket streaming for full text
@@ -265,6 +310,8 @@ export default function ChessGame() {
     if (result) {
       setGame(gameCopy);
       setMoveHistory(prev => [...prev, move]);
+      
+      // For computer moves, send and let the callbacks handle display
       sendMoveToBackend(move, 'computer');
     }
   };
@@ -283,6 +330,12 @@ export default function ChessGame() {
     
     if (isThinking) {
       console.log('Blocked: Computer is thinking');
+      return false;
+    }
+    
+    // Check if WebSocket is connected before allowing moves
+    if (USE_WEBSOCKET_AUDIO && (!wsAudio || !wsAudio.isConnected)) {
+      console.log('Waiting for audio connection...');
       return false;
     }
 
@@ -309,50 +362,50 @@ export default function ChessGame() {
       // Send move to backend and wait for commentary before computer moves
       if (!gameCopy.isGameOver()) {
         setIsThinking(true);
+        isThinkingRef.current = true;
+        console.log('Set thinking to true');
         
-        // Start commentary request
-        const commentaryPromise = sendMoveToBackend(move.san, 'human');
+        // Send the move for commentary
+        sendMoveToBackend(move.san, 'human');
         
-        // Set minimum delay before computer moves (for better UX)
-        const minDelay = 500;
-        const startTime = Date.now();
-        
-        commentaryPromise.then((success) => {
-          const elapsed = Date.now() - startTime;
-          const remainingDelay = Math.max(0, minDelay - elapsed);
+        // Wait for audio to complete before computer moves
+        if (USE_WEBSOCKET_AUDIO && wsAudio) {
+          console.log('Human move sent, will wait for audio to complete');
           
-          // Function to make computer move when ready
-          const doComputerMove = () => {
-            makeComputerMove(gameCopy);
-            setIsThinking(false);
+          // Set up a callback for when audio ends
+          // This will be triggered from the streaming complete handler
+          const audioEndHandler = () => {
+            console.log('Human move audio complete, computer will move in 1s');
+            setTimeout(() => {
+              if (isThinkingRef.current) {
+                makeComputerMove(gameCopy);
+                setIsThinking(false);
+                isThinkingRef.current = false;
+              }
+            }, 1000);
           };
           
-          // If using WebSocket audio, wait for it to finish
-          if (USE_WEBSOCKET_AUDIO && wsAudio?.isPlaying) {
-            console.log('Waiting for audio to finish...');
-            const checkInterval = setInterval(() => {
-              if (!wsAudio.isPlaying) {
-                clearInterval(checkInterval);
-                setTimeout(doComputerMove, 500); // Small delay after audio
-              }
-            }, 100);
-            
-            // Timeout after 10 seconds in case something goes wrong
-            setTimeout(() => {
-              clearInterval(checkInterval);
-              if (isThinking) {
-                doComputerMove();
-              }
-            }, 10000);
-          } else {
-            // No audio playing, use standard delay
-            setTimeout(doComputerMove, remainingDelay);
-          }
-        }).catch(() => {
-          // If commentary failed, still let computer move
-          makeComputerMove(gameCopy);
-          setIsThinking(false);
-        });
+          // Store the handler to be called from the streaming complete event
+          // We'll trigger this from the TTS playback completion
+          (window as any).__audioEndHandler = audioEndHandler;
+          
+          // Safety timeout after 30 seconds
+          setTimeout(() => {
+            if (isThinkingRef.current) {
+              console.log('Safety timeout reached');
+              makeComputerMove(gameCopy);
+              setIsThinking(false);
+              isThinkingRef.current = false;
+            }
+          }, 30000);
+        } else {
+          // No WebSocket audio, use standard delay
+          setTimeout(() => {
+            makeComputerMove(gameCopy);
+            setIsThinking(false);
+            isThinkingRef.current = false;
+          }, 2000);
+        }
       } else {
         // Game is over, just send the final move
         sendMoveToBackend(move.san, 'human');
@@ -423,6 +476,11 @@ export default function ChessGame() {
               🔇 Make a move to enable audio
             </div>
           )}
+          {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected && (
+            <div className="px-6 py-3 text-amber-600 font-semibold animate-pulse">
+              🔌 Connecting audio...
+            </div>
+          )}
         </div>
       </div>
 
@@ -437,7 +495,11 @@ export default function ChessGame() {
         </div>
         <div className="h-[600px] overflow-y-auto space-y-3">
           {commentary.length === 0 ? (
-            <p className="text-amber-700 italic p-4">Make a move to hear the roast...</p>
+            <p className="text-amber-700 italic p-4">
+              {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected 
+                ? 'Waiting for audio connection...'
+                : 'Make a move to hear the roast...'}
+            </p>
           ) : (
             <div className="space-y-3">
               {commentary.map((comment, index) => (
