@@ -1,10 +1,20 @@
 # Build stage for Next.js
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app
+
+# Copy package files for dependency installation
 COPY package*.json ./
 RUN apk add curl
 RUN npm ci
-COPY . .
+
+# Copy only necessary frontend source files
+COPY next.config.ts ./
+COPY tsconfig.json ./
+COPY postcss.config.mjs ./
+COPY src/ ./src/
+COPY public/ ./public/
+
+# Build the frontend
 RUN npm run build
 RUN npm run export || npx next export || echo "Export not configured"
 
