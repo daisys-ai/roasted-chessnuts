@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Chess } from 'chess.js';
 import axios from 'axios';
 import { useDaisysWebSocket } from '@/hooks/useDaisysWebSocket';
+import { useVoice } from '@/contexts/VoiceContext';
 
 interface Commentary {
   commentary: string;
@@ -16,7 +17,7 @@ interface Commentary {
 const USE_WEBSOCKET_AUDIO = true; // Set to true to enable WebSocket streaming
 const USE_STREAMING_COMMENTARY = true; // Enable sentence-by-sentence streaming
 
-export default function ChessGame() {
+function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
   const [Chessboard, setChessboard] = useState<any>(null);
   const [game, setGame] = useState(() => new Chess());
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
@@ -33,8 +34,8 @@ export default function ChessGame() {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const pendingCommentaryRef = useRef<Commentary | null>(null);
 
-  // WebSocket audio hook (only used if enabled)
-  const wsAudio = USE_WEBSOCKET_AUDIO ? useDaisysWebSocket() : null;
+  // WebSocket audio hook - always called to satisfy React's rules
+  const wsAudio = USE_WEBSOCKET_AUDIO ? useDaisysWebSocket(voiceId) : null;
   
   useEffect(() => {
     if (wsAudio) {
@@ -595,4 +596,26 @@ export default function ChessGame() {
       </div>
     </div>
   );
+}
+
+export default function ChessGame() {
+  const { voiceId, isLoading: isVoiceLoading, error: voiceError } = useVoice();
+
+  // Show loading state while voice is being fetched
+  if (USE_WEBSOCKET_AUDIO && isVoiceLoading) {
+    return <div className="bg-amber-100 p-6 rounded-lg shadow-2xl">Loading voice configuration...</div>;
+  }
+  
+  // Show error if voice loading failed
+  if (USE_WEBSOCKET_AUDIO && voiceError) {
+    return <div className="bg-amber-100 p-6 rounded-lg shadow-2xl text-red-600">Error: {voiceError}</div>;
+  }
+  
+  // Voice must be loaded if we're using WebSocket audio
+  if (USE_WEBSOCKET_AUDIO && !voiceId) {
+    return <div className="bg-amber-100 p-6 rounded-lg shadow-2xl text-red-600">No voice available</div>;
+  }
+
+  // Render the game - if WebSocket is disabled, we pass a dummy voice ID
+  return <ChessGameWithVoice voiceId={voiceId || "dummy"} />;
 }

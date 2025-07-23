@@ -109,6 +109,21 @@ class CommentaryResponse(BaseModel):
 async def health_check():
     return {"status": "healthy", "service": "Roasted Chessnuts"}
 
+@app.get("/api/voice")
+async def get_random_voice():
+    """Get a random voice ID from the configured list"""
+    import random
+    
+    if not DAISYS_VOICE_ID:
+        raise HTTPException(status_code=500, detail="No voice IDs configured")
+    
+    # Split the space-separated list and pick a random one
+    voice_ids = DAISYS_VOICE_ID.split()
+    selected_voice = random.choice(voice_ids)
+    
+    logger.info(f"Selected voice ID: {selected_voice} from {len(voice_ids)} available voices")
+    return {"voice_id": selected_voice}
+
 
 @app.post("/api/websocket-url")
 async def get_websocket_url():
@@ -116,11 +131,15 @@ async def get_websocket_url():
     if not daisys_client or not DAISYS_VOICE_ID:
         raise HTTPException(status_code=500, detail="TTS service not configured")
     
+    # Use the first voice as default (the actual voice is passed per request)
+    voice_ids = DAISYS_VOICE_ID.split()
+    default_voice = voice_ids[0] if voice_ids else None
+    
     try:
         with daisys_client as speak:
             # Get WebSocket URL for streaming
-            ws_url = speak.websocket_url(voice_id=DAISYS_VOICE_ID)
-            return {"url": ws_url, "voice_id": DAISYS_VOICE_ID}
+            ws_url = speak.websocket_url(voice_id=default_voice)
+            return {"url": ws_url, "voice_id": default_voice}
     except Exception as e:
         logger.error(f"Error getting WebSocket URL: {str(e)}")
         logger.exception("WebSocket URL exception:")
@@ -135,10 +154,14 @@ async def get_websocket_url_text():
     if not daisys_client or not DAISYS_VOICE_ID:
         raise HTTPException(status_code=500, detail="TTS service not configured")
     
+    # Use the first voice as default (the actual voice is passed per request)
+    voice_ids = DAISYS_VOICE_ID.split()
+    default_voice = voice_ids[0] if voice_ids else None
+    
     try:
         with daisys_client as speak:
             # Get WebSocket URL for streaming
-            ws_url = speak.websocket_url(voice_id=DAISYS_VOICE_ID)
+            ws_url = speak.websocket_url(voice_id=default_voice)
             return PlainTextResponse(content=ws_url)
     except Exception as e:
         logger.error(f"Error getting WebSocket URL: {str(e)}")

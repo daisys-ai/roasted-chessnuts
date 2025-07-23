@@ -164,7 +164,7 @@ class ChunkOrderer {
   }
 }
 
-export function useDaisysWebSocket() {
+export function useDaisysWebSocket(voiceId: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const wsRef = useRef<any>(null);
@@ -173,6 +173,12 @@ export function useDaisysWebSocket() {
   const activeRequestsRef = useRef<Set<number>>(new Set());
   const onAudioStartRef = useRef<(() => void) | null>(null);
   const onAudioEndRef = useRef<(() => void) | null>(null);
+  const voiceIdRef = useRef(voiceId);
+  
+  // Update ref when voiceId changes
+  useEffect(() => {
+    voiceIdRef.current = voiceId;
+  }, [voiceId]);
 
   useEffect(() => {
     // Dynamically import Daisys modules
@@ -246,22 +252,13 @@ export function useDaisysWebSocket() {
     activeRequestsRef.current.add(globalId);
     
     try {
-      // Get voice ID from backend if not cached
-      let voiceId = wsRef.current.voiceId;
-      if (!voiceId) {
-        const response = await fetch('/api/websocket-url', { method: 'POST' });
-        const data = await response.json();
-        voiceId = data.voice_id;
-        wsRef.current.voiceId = voiceId;
-      }
-      
-      // Create TTS request in Daisys format
+      // Create TTS request in Daisys format using the voice ID from the ref
       const message = {
         command: '/take/generate',
         request_id: requestId,
         data: {
           text: text,
-          voice_id: voiceId
+          voice_id: voiceIdRef.current
         },
         stream: { mode: 'chunks' }
       };
