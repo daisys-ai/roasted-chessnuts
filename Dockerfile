@@ -22,6 +22,9 @@ RUN npm run export || npx next export || echo "Export not configured"
 FROM python:3.11-slim
 WORKDIR /app
 
+# Force Python to run in unbuffered mode
+ENV PYTHONUNBUFFERED=1
+
 # Install backend dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

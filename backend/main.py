@@ -13,10 +13,60 @@ from pathlib import Path
 import uuid
 import time
 import json
+import logging
+import sys
+
+# Configure logging for uvicorn compatibility
+def setup_logging():
+    """Configure logging to work well with uvicorn"""
+    # Get the root logger
+    root_logger = logging.getLogger()
+    
+    # Clear any existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Create a formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Create a stream handler (stdout)
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    stream_handler.setLevel(logging.DEBUG)
+    
+    # Add handler to root logger
+    root_logger.addHandler(stream_handler)
+    root_logger.setLevel(logging.INFO)
+    
+    # Configure specific loggers
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    logging.getLogger("litellm").setLevel(logging.WARNING)  # Reduce litellm verbosity
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # Reduce httpx verbosity
+    
+    return logging.getLogger(__name__)
+
+# Setup logging
+logger = setup_logging()
 
 load_dotenv()
 
 app = FastAPI(title="Roasted Chessnuts Backend")
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application on startup"""
+    logger.info("=" * 60)
+    logger.info("Starting Roasted Chessnuts Backend")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"OpenAI API Key configured: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No'}")
+    logger.info(f"LLM Model: {os.getenv('LLM_MODEL', 'gpt-3.5-turbo-0125')}")
+    logger.info(f"Daisys TTS configured: {'Yes' if os.getenv('DAISYS_EMAIL') and os.getenv('DAISYS_PASSWORD') else 'No'}")
+    logger.info("=" * 60)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,9 +87,9 @@ if DAISYS_EMAIL and DAISYS_PASSWORD:
     try:
         # Create the client but don't enter context yet
         daisys_client = DaisysAPI('speak', email=DAISYS_EMAIL, password=DAISYS_PASSWORD)
-        print("Daisys API client created successfully")
+        logger.info("Daisys API client created successfully")
     except Exception as e:
-        print(f"Failed to create Daisys API client: {str(e)}")
+        logger.error(f"Failed to create Daisys API client: {str(e)}")
         daisys_client = None
 
 class MoveRequest(BaseModel):
@@ -202,9 +252,8 @@ async def get_websocket_url():
             ws_url = speak.websocket_url(voice_id=DAISYS_VOICE_ID)
             return {"url": ws_url, "voice_id": DAISYS_VOICE_ID}
     except Exception as e:
-        print(f"Error getting WebSocket URL: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error getting WebSocket URL: {str(e)}")
+        logger.exception("WebSocket URL exception:")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/websocket-url-text")
@@ -222,9 +271,8 @@ async def get_websocket_url_text():
             ws_url = speak.websocket_url(voice_id=DAISYS_VOICE_ID)
             return PlainTextResponse(content=ws_url)
     except Exception as e:
-        print(f"Error getting WebSocket URL: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error getting WebSocket URL: {str(e)}")
+        logger.exception("WebSocket URL exception:")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/move-stream")
@@ -232,8 +280,22 @@ async def process_move_stream(move_request: MoveRequest):
     """Stream commentary sentences as they are generated"""
     async def generate():
         try:
-            # Prepare the prompt
-            prompt = f"{move_request.move} by {move_request.player}"
+            logger.info(f"Processing move (streaming): {move_request.move} by {move_request.player}")
+            
+            # Prepare the prompt with FEN
+            prompt = f"{move_request.move} by {move_request.player}. "
+            prompt += f"The FEN so far: {move_request.fen}."
+            logger.info(f'Prompt: {prompt}')
+            
+            # Check if OpenAI API key is set
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                logger.error("ERROR: OPENAI_API_KEY not set!")
+                error_data = {'type': 'error', 'message': 'API key not configured'}
+                yield f"data: {json.dumps(error_data)}\n\n"
+                return
+            
+            logger.info(f"Using model: {os.getenv('LLM_MODEL', 'gpt-3.5-turbo-0125')}")
             
             # Track sentences
             current_sentence = ""
@@ -244,17 +306,21 @@ async def process_move_stream(move_request: MoveRequest):
             response = await litellm.acompletion(
                 model=os.getenv("LLM_MODEL", "gpt-3.5-turbo-0125"),
                 messages=[
-                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage. No pleasantries."},
+                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage, no pleasantries. Relevant to the position, referencing games, openings, defenses, gambits, but be hilariously critical."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=25,
                 temperature=0.8,
                 stream=True,
-                timeout=5.0
+                timeout=10.0  # Increased timeout like non-streaming version
             )
+            
+            logger.debug("Starting to process LLM stream...")
+            chunk_count = 0
             
             # Process streamed chunks
             async for chunk in response:
+                chunk_count += 1
                 if chunk.choices[0].delta.content:
                     text = chunk.choices[0].delta.content
                     current_sentence += text
@@ -278,14 +344,30 @@ async def process_move_stream(move_request: MoveRequest):
                 data = {'type': 'sentence', 'text': sentence, 'index': sentence_count}
                 yield f"data: {json.dumps(data)}\n\n"
             
+            logger.debug(f"Processed {chunk_count} chunks")
+            
+            # Log the generated commentary
+            commentary = full_commentary.strip()
+            logger.info(f"Generated commentary: {commentary}")
+            
             # Send complete signal with full commentary
-            data = {'type': 'complete', 'full_commentary': full_commentary.strip()}
+            data = {'type': 'complete', 'full_commentary': commentary}
             yield f"data: {json.dumps(data)}\n\n"
             
         except Exception as e:
-            print(f"Error in streaming: {str(e)}")
-            error_data = {'type': 'error', 'message': str(e)}
-            yield f"data: {json.dumps(error_data)}\n\n"
+            logger.error(f"Error in streaming: {str(e)}")
+            logger.exception("Streaming exception traceback:")
+            
+            # Check if it's an LLM error
+            if 'litellm' in str(type(e)).lower() or 'openai' in str(type(e)).lower():
+                # Send a fallback commentary
+                data = {'type': 'sentence', 'text': "That move was so bad, even the AI is speechless!", 'index': 0}
+                yield f"data: {json.dumps(data)}\n\n"
+                data = {'type': 'complete', 'full_commentary': "That move was so bad, even the AI is speechless!"}
+                yield f"data: {json.dumps(data)}\n\n"
+            else:
+                error_data = {'type': 'error', 'message': str(e)}
+                yield f"data: {json.dumps(error_data)}\n\n"
     
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -324,4 +406,38 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # When running directly, configure uvicorn logging
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        log_config={
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    "datefmt": "%Y-%m-%d %H:%M:%S"
+                }
+            },
+            "handlers": {
+                "default": {
+                    "formatter": "default",
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stdout"
+                }
+            },
+            "root": {
+                "level": "INFO",
+                "handlers": ["default"]
+            },
+            "loggers": {
+                "uvicorn.error": {
+                    "level": "INFO"
+                },
+                "uvicorn.access": {
+                    "level": "INFO"
+                }
+            }
+        }
+    )
