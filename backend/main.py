@@ -60,6 +60,7 @@ async def process_move(move_request: MoveRequest):
         
         # Even shorter prompt for maximum speed
         prompt = f"{move_request.move} by {move_request.player}"
+        prompt += f"\nThe FEN so far: {move_request.fen}."
 
         # Check if OpenAI API key is set
         api_key = os.getenv("OPENAI_API_KEY")
@@ -81,7 +82,7 @@ async def process_move(move_request: MoveRequest):
             response = await litellm.acompletion(
                 model=os.getenv("LLM_MODEL", "gpt-3.5-turbo-0125"),  # Latest GPT-3.5 model
                 messages=[
-                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage. No pleasantries."},
+                    {"role": "system", "content": "Roast this chess move in ONE short sentence (max 10 words). Be savage. No pleasantries. Make it relevant to the current position, possibly reference well-known chess games."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=25,  # Enough for 2 complete sentences
