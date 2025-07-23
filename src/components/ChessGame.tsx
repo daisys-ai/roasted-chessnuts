@@ -591,6 +591,15 @@ export default function ChessGame() {
               </div>
             )}
           </div>
+          {/* Daisys Voice Attribution */}
+          <div className="mt-3 flex items-center justify-center gap-2 text-xs text-amber-700">
+            <span>Voices by</span>
+            <img 
+              src="/static/daisys-logo-vid.svg" 
+              alt="Daisys" 
+              className="h-4 w-auto"
+            />
+          </div>
         </div>
       </div>
     </div>
