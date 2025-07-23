@@ -9,6 +9,7 @@ interface Commentary {
   commentary: string;
   audioUrl?: string;
   audioUrls?: string[];  // Multiple audio URLs for sentence-by-sentence playback
+  commentId?: string;  // ID for saved WebSocket audio chunks
 }
 
 // Feature flag for WebSocket audio
@@ -212,7 +213,22 @@ export default function ChessGame() {
                         const onAudioEnd = player === 'human' && (window as any).__audioEndHandler ? 
                           (window as any).__audioEndHandler : null;
                         
-                        wsAudio.playText(fullCommentary, onAudioStart, onAudioEnd);
+                        wsAudio.playText(fullCommentary, onAudioStart, onAudioEnd).then(commentId => {
+                          if (commentId) {
+                            // Update the commentary with the comment ID
+                            setCommentary(prev => {
+                              const updated = [...prev];
+                              const index = updated.findIndex(c => c.commentary === fullCommentary);
+                              if (index !== -1) {
+                                updated[index] = {
+                                  ...updated[index],
+                                  commentId: commentId
+                                };
+                              }
+                              return updated;
+                            });
+                          }
+                        });
                       }
                     } else if (data.type === 'error') {
                       console.error('Streaming error:', data.message);
@@ -268,7 +284,22 @@ export default function ChessGame() {
             (window as any).__audioEndHandler : null;
           
           if (newCommentary && newCommentary.commentary) {
-            wsAudio.playText(newCommentary.commentary, onAudioStart, onAudioEnd);
+            wsAudio.playText(newCommentary.commentary, onAudioStart, onAudioEnd).then(commentId => {
+              if (commentId) {
+                // Update the commentary with the comment ID
+                setCommentary(prev => {
+                  const updated = [...prev];
+                  const index = updated.findIndex(c => c.commentary === newCommentary.commentary);
+                  if (index !== -1) {
+                    updated[index] = {
+                      ...updated[index],
+                      commentId: commentId
+                    };
+                  }
+                  return updated;
+                });
+              }
+            });
           } else {
             console.error('Invalid commentary response:', newCommentary);
             // Still show the commentary even if TTS fails
@@ -279,11 +310,7 @@ export default function ChessGame() {
         }
       }
       
-      if (USE_WEBSOCKET_AUDIO && wsAudio?.isConnected) {
-        // Use WebSocket streaming for full text
-        console.log('Streaming audio via WebSocket for text:', newCommentary.commentary);
-        wsAudio.playText(newCommentary.commentary);
-      } else if (newCommentary.audioUrls && newCommentary.audioUrls.length > 0) {
+      if (newCommentary.audioUrls && newCommentary.audioUrls.length > 0) {
         // Play multiple audio URLs in sequence
         newCommentary.audioUrls.forEach((url, index) => {
           if (!hasPlayedRef.current.has(url)) {
@@ -443,6 +470,11 @@ export default function ChessGame() {
       audioRef.current.src = '';
     }
     setIsPlaying(false);
+    
+    // Clear saved WebSocket audio chunks
+    if (USE_WEBSOCKET_AUDIO && wsAudio) {
+      wsAudio.stop(); // This will reset the chunk orderer which clears saved chunks
+    }
   };
 
   if (!Chessboard) {
@@ -531,7 +563,21 @@ export default function ChessGame() {
                     }}
                   >
                     <p className="text-amber-900 italic text-sm flex-1">{comment.commentary}</p>
-                    {(comment.audioUrl || comment.audioUrls) && (
+                    {USE_WEBSOCKET_AUDIO && wsAudio ? (
+                      <button 
+                        onClick={() => {
+                          if (comment.commentId && wsAudio.hasSavedAudio(comment.commentId)) {
+                            wsAudio.playSavedAudio(comment.commentId);
+                          } else if (wsAudio.isConnected) {
+                            wsAudio.playText(comment.commentary);
+                          }
+                        }}
+                        className="text-amber-600 hover:text-amber-800 transition-colors flex-shrink-0"
+                        aria-label="Play audio"
+                      >
+                        🔊
+                      </button>
+                    ) : (comment.audioUrl || comment.audioUrls) && (
                       <button 
                         onClick={() => playAudioManually(comment)}
                         className="text-amber-600 hover:text-amber-800 transition-colors flex-shrink-0"

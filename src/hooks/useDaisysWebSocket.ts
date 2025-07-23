@@ -14,6 +14,7 @@ class ChunkOrderer {
   private nextGlobalId = 1;
   private audioPlayer: any;
   private completedRequests: Set<number> = new Set();
+  private savedChunks: Map<string, Array<{prefix: any, audio: ArrayBuffer}>> = new Map(); // Store chunks by comment ID
 
   constructor(audioPlayer: any) {
     this.audioPlayer = audioPlayer;
@@ -59,6 +60,17 @@ class ChunkOrderer {
       // Process all chunks for current globalId
       for (const [key, chunkData] of currentChunks) {
         this.audioPlayer.playAudio(chunkData.prefix, chunkData.audio);
+        
+        // Save chunk for replay
+        const commentId = `comment-${chunkData.globalId}`;
+        if (!this.savedChunks.has(commentId)) {
+          this.savedChunks.set(commentId, []);
+        }
+        this.savedChunks.get(commentId)!.push({
+          prefix: chunkData.prefix,
+          audio: chunkData.audio
+        });
+        
         this.chunks.delete(key);
         processed = true;
       }
@@ -97,6 +109,58 @@ class ChunkOrderer {
     this.chunks.clear();
     this.completedRequests.clear();
     this.nextGlobalId = 1;
+    this.savedChunks.clear();
+  }
+
+  playSavedChunks(commentId: string) {
+    const chunks = this.savedChunks.get(commentId);
+    if (!chunks || chunks.length === 0) {
+      console.log(`No saved chunks found for ${commentId}`);
+      return;
+    }
+    
+    console.log(`Playing ${chunks.length} saved chunks for ${commentId}`);
+    
+    // Group chunks by part_id to ensure proper ordering
+    const partGroups = new Map<number, Array<{prefix: any, audio: ArrayBuffer}>>();
+    
+    for (const chunk of chunks) {
+      const partId = chunk.prefix.part_id ?? 0;
+      if (!partGroups.has(partId)) {
+        partGroups.set(partId, []);
+      }
+      partGroups.get(partId)!.push(chunk);
+    }
+    
+    // Sort parts by part_id
+    const sortedParts = Array.from(partGroups.entries()).sort((a, b) => a[0] - b[0]);
+    
+    console.log(`Found ${sortedParts.length} parts to play`);
+    
+    // Play all chunks in correct order: by part, then by chunk within each part
+    for (const [partId, partChunks] of sortedParts) {
+      // Sort chunks within the part by chunk_id
+      const sortedChunks = partChunks.sort((a, b) => {
+        const aChunkId = a.prefix.chunk_id ?? 0;
+        const bChunkId = b.prefix.chunk_id ?? 0;
+        return aChunkId - bChunkId;
+      });
+      
+      console.log(`Playing part ${partId} with ${sortedChunks.length} chunks`);
+      
+      // Play all chunks for this part
+      for (const chunk of sortedChunks) {
+        this.audioPlayer.playAudio(chunk.prefix, chunk.audio);
+      }
+    }
+  }
+
+  hasSavedChunks(commentId: string): boolean {
+    return this.savedChunks.has(commentId) && this.savedChunks.get(commentId)!.length > 0;
+  }
+  
+  getSavedChunks(commentId: string): Array<{prefix: any, audio: ArrayBuffer}> | undefined {
+    return this.savedChunks.get(commentId);
   }
 }
 
@@ -165,10 +229,10 @@ export function useDaisysWebSocket() {
     };
   }, []);
 
-  const playText = useCallback(async (text: string, onStart?: () => void, onEnd?: () => void) => {
+  const playText = useCallback(async (text: string, onStart?: () => void, onEnd?: () => void): Promise<string | null> => {
     if (!wsRef.current || !isConnected || !chunkOrdererRef.current) {
       console.error('WebSocket not ready - please wait for connection');
-      return;
+      return null;
     }
     
     // Store callbacks for this request
@@ -178,6 +242,7 @@ export function useDaisysWebSocket() {
     // Use global counter for request ID
     const requestId = globalRequestCounter++;
     const globalId = requestId; // Use request ID as global ID
+    const commentId = `comment-${globalId}`;
     activeRequestsRef.current.add(globalId);
     
     try {
@@ -274,6 +339,8 @@ export function useDaisysWebSocket() {
         setIsPlaying(false);
       }
     }
+    
+    return commentId; // Return the comment ID for later reference
   }, [isConnected]);
 
   const stop = useCallback(() => {
@@ -293,10 +360,60 @@ export function useDaisysWebSocket() {
     setIsPlaying(false);
   }, []);
 
+  const playSavedAudio = useCallback(async (commentId: string) => {
+    if (!chunkOrdererRef.current) {
+      console.error('Chunk orderer not ready');
+      return;
+    }
+    
+    try {
+      // Import ChunkAudioPlayer dynamically
+      const { ChunkAudioPlayer } = await import('@/lib/daisys_ws/chunk_audio_player');
+      
+      // Create a fresh audio player for replay
+      const replayPlayer = new ChunkAudioPlayer();
+      
+      // Get the saved chunks
+      const chunks = chunkOrdererRef.current.getSavedChunks(commentId);
+      if (!chunks || chunks.length === 0) {
+        console.log(`No saved chunks found for ${commentId}`);
+        return;
+      }
+      
+      console.log(`Playing ${chunks.length} saved chunks for ${commentId}`);
+      
+      // Play all chunks in order
+      for (const chunk of chunks) {
+        replayPlayer.playAudio(chunk.prefix, chunk.audio);
+      }
+      
+      // Clean up when audio finishes (approximate duration)
+      const duration = replayPlayer.buffer ? 
+        (replayPlayer.buffer.length / (replayPlayer.audioContext?.sampleRate || 44100)) * 1000 : 
+        5000;
+      
+      setTimeout(() => {
+        if (replayPlayer.endStream) {
+          replayPlayer.endStream();
+        }
+      }, duration + 1000);
+      
+    } catch (error) {
+      console.error('Error playing saved audio:', error);
+    }
+  }, []);
+
+  const hasSavedAudio = useCallback((commentId: string): boolean => {
+    if (!chunkOrdererRef.current) return false;
+    return chunkOrdererRef.current.hasSavedChunks(commentId);
+  }, []);
+
   return {
     isConnected,
     isPlaying,
     playText,
+    playSavedAudio,
+    hasSavedAudio,
     stop
   };
 }
