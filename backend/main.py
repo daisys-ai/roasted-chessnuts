@@ -184,34 +184,10 @@ async def process_move(move_request: MoveRequest):
         print(f"Error processing move: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "service": "Roasted Chessnuts"}
 
-@app.get("/test-llm")
-async def test_llm():
-    """Test if LLM is working"""
-    try:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return {"error": "OPENAI_API_KEY not set"}
-        
-        response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Say 'test passed'"}],
-            max_tokens=10
-        )
-        
-        return {
-            "status": "success",
-            "response": response.choices[0].message.content
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "type": str(type(e))
-        }
 
 @app.post("/api/websocket-url")
 async def get_websocket_url():

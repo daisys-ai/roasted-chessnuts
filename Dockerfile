@@ -2,6 +2,7 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 COPY package*.json ./
+RUN apk add curl
 RUN npm ci
 COPY . .
 RUN npm run build
