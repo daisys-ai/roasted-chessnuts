@@ -22,6 +22,8 @@ export default function ChessGame() {
   const [commentary, setCommentary] = useState<Commentary[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const isThinkingRef = useRef(false);
+  const [gameMode, setGameMode] = useState<'vs-computer' | 'vs-human'>('vs-computer');
+  const gameRef = useRef(game); // Keep a ref to prevent stale closures
   const audioQueueRef = useRef<string[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -45,6 +47,11 @@ export default function ChessGame() {
       setChessboard(() => mod.Chessboard);
     });
   }, []);
+
+  // Keep gameRef in sync with game state
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
 
   useEffect(() => {
     const audio = new Audio();
@@ -298,7 +305,9 @@ export default function ChessGame() {
     }
   };
 
-  const makeComputerMove = (currentGame: Chess) => {
+  const makeComputerMove = () => {
+    // Always use the latest game state from ref
+    const currentGame = gameRef.current;
     const possibleMoves = currentGame.moves();
     if (possibleMoves.length === 0) return;
 
@@ -328,7 +337,7 @@ export default function ChessGame() {
       }
     }
     
-    if (isThinking) {
+    if (isThinking || isThinkingRef.current) {
       console.log('Blocked: Computer is thinking');
       return false;
     }
@@ -360,7 +369,7 @@ export default function ChessGame() {
       setMoveHistory(prev => [...prev, move.san]);
       
       // Send move to backend and wait for commentary before computer moves
-      if (!gameCopy.isGameOver()) {
+      if (!gameCopy.isGameOver() && gameMode === 'vs-computer') {
         setIsThinking(true);
         isThinkingRef.current = true;
         console.log('Set thinking to true');
@@ -378,7 +387,7 @@ export default function ChessGame() {
             console.log('Human move audio complete, computer will move in 1s');
             setTimeout(() => {
               if (isThinkingRef.current) {
-                makeComputerMove(gameCopy);
+                makeComputerMove();
                 setIsThinking(false);
                 isThinkingRef.current = false;
               }
@@ -393,7 +402,7 @@ export default function ChessGame() {
           setTimeout(() => {
             if (isThinkingRef.current) {
               console.log('Safety timeout reached');
-              makeComputerMove(gameCopy);
+              makeComputerMove();
               setIsThinking(false);
               isThinkingRef.current = false;
             }
@@ -401,7 +410,7 @@ export default function ChessGame() {
         } else {
           // No WebSocket audio, use standard delay
           setTimeout(() => {
-            makeComputerMove(gameCopy);
+            makeComputerMove();
             setIsThinking(false);
             isThinkingRef.current = false;
           }, 2000);
@@ -424,6 +433,9 @@ export default function ChessGame() {
     setGame(newGame);
     setMoveHistory([]);
     setCommentary([]);
+    setIsThinking(false);
+    isThinkingRef.current = false;
+    pendingCommentaryRef.current = null;
     audioQueueRef.current = [];
     hasPlayedRef.current.clear();
     if (audioRef.current) {
@@ -438,96 +450,103 @@ export default function ChessGame() {
   }
 
   return (
-    <>
-      <div className="bg-amber-100 p-4 rounded-lg shadow-2xl">
-        <div className="w-full max-w-[600px] mx-auto bg-amber-50 p-2 rounded-lg">
-          <Chessboard 
-            id="RoastedChessnutsBoard"
-            position={game.fen()} 
-            onPieceDrop={onDrop}
-            arePiecesDraggable={true}
-            boardWidth={560}
-            customBoardStyle={{
-              borderRadius: '8px',
-              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
-            }}
-          />
-        </div>
+    <div className="flex flex-col lg:flex-row gap-4 p-4 w-full max-w-6xl mx-auto">
+      {/* Chess Board */}
+      <div className="w-full lg:w-1/2 flex items-start justify-center lg:justify-end">
+        <div className="w-full max-w-[90vw] sm:max-w-[500px] bg-amber-100 p-4 rounded-lg shadow-2xl">
+          <div className="bg-amber-50 p-2 rounded-lg">
+            <Chessboard 
+              id="RoastedChessnutsBoard"
+              position={game.fen()} 
+              onPieceDrop={onDrop}
+              arePiecesDraggable={!isThinking && (!USE_WEBSOCKET_AUDIO || wsAudio?.isConnected)}
+              customBoardStyle={{
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+              }}
+            />
+          </div>
         
-        <div className="mt-6 flex justify-center gap-4">
-          <button 
-            onClick={(e) => {
-              console.log('New Game button clicked');
-              e.preventDefault();
-              resetGame();
-            }}
-            className="px-6 py-3 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors font-semibold shadow-lg cursor-pointer"
-          >
-            New Game
-          </button>
-          {isThinking && (
-            <div className="px-6 py-3 text-amber-700 font-semibold flex items-center gap-2">
-              <div className="animate-spin h-4 w-4 border-2 border-amber-700 border-t-transparent rounded-full"></div>
-              Computer thinking...
-            </div>
-          )}
-          {audioBlocked && (
-            <div className="px-6 py-3 text-amber-600 font-semibold animate-pulse">
-              🔇 Make a move to enable audio
-            </div>
-          )}
-          {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected && (
-            <div className="px-6 py-3 text-amber-600 font-semibold animate-pulse">
-              🔌 Connecting audio...
-            </div>
-          )}
+        
+          <div className="mt-4 flex flex-col sm:flex-row justify-center items-center gap-2">
+            <button 
+              onClick={(e) => {
+                console.log('New Game button clicked');
+                e.preventDefault();
+                resetGame();
+              }}
+              className="px-4 py-2 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors font-semibold shadow-lg cursor-pointer text-sm"
+            >
+              New Game
+            </button>
+            {isThinking && (
+              <div className="px-4 py-2 text-amber-700 font-semibold flex items-center gap-2 text-sm">
+                <div className="animate-spin h-3 w-3 border-2 border-amber-700 border-t-transparent rounded-full"></div>
+                Computer thinking...
+              </div>
+            )}
+            {audioBlocked && (
+              <div className="px-4 py-2 text-amber-600 font-semibold animate-pulse text-sm">
+                🔇 Make a move to enable audio
+              </div>
+            )}
+            {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected && (
+              <div className="px-4 py-2 text-amber-600 font-semibold animate-pulse text-sm">
+                🔌 Connecting audio...
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="bg-amber-100 p-6 rounded-lg shadow-2xl">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-amber-900">Commentary</h2>
-          {USE_WEBSOCKET_AUDIO && (
-            <span className="text-sm text-amber-700">
-              WebSocket: {wsStatus}
-            </span>
-          )}
-        </div>
-        <div className="h-[600px] overflow-y-auto space-y-3">
-          {commentary.length === 0 ? (
-            <p className="text-amber-700 italic p-4">
-              {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected 
-                ? 'Waiting for audio connection...'
-                : 'Make a move to hear the roast...'}
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {commentary.map((comment, index) => (
-                <div 
-                  key={`${index}-${comment.commentary.substring(0, 10)}`} 
-                  className={`p-4 bg-amber-50 rounded-lg border-2 border-amber-300 transition-all duration-500 ease-out ${
-                    index === 0 ? 'animate-slide-in' : ''
-                  }`}
-                  style={{
-                    opacity: index === 0 ? 0 : 1,
-                    animation: index === 0 ? 'slideIn 0.5s ease-out forwards' : 'none'
-                  }}
-                >
-                  <p className="text-amber-900 italic">{comment.commentary}</p>
-                  {(comment.audioUrl || comment.audioUrls) && (
-                    <button 
-                      onClick={() => playAudioManually(comment)}
-                      className="text-xs text-amber-600 hover:text-amber-800 mt-2 transition-colors"
-                    >
-                      🔊 Play Audio
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+      {/* Commentary Panel */}
+      <div className="w-full lg:w-1/2 flex items-start justify-center lg:justify-start">
+        <div className="w-full max-w-[90vw] sm:max-w-[500px] bg-amber-100 p-4 rounded-lg shadow-2xl">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-amber-900">Commentary</h2>
+            {USE_WEBSOCKET_AUDIO && (
+              <span className="text-xs text-amber-700">
+                WebSocket: {wsStatus}
+              </span>
+            )}
+          </div>
+          <div className="h-[400px] sm:h-[500px] lg:h-[600px] overflow-y-auto space-y-3">
+            {commentary.length === 0 ? (
+              <p className="text-amber-700 italic p-4 text-sm">
+                {USE_WEBSOCKET_AUDIO && !wsAudio?.isConnected 
+                  ? 'Waiting for audio connection...'
+                  : 'Make a move to hear the roast...'}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {commentary.map((comment, index) => (
+                  <div 
+                    key={`${index}-${comment.commentary.substring(0, 10)}`} 
+                    className={`p-3 bg-amber-50 rounded-lg border-2 border-amber-300 transition-all duration-500 ease-out flex items-center justify-between gap-2 ${
+                      index === 0 ? 'animate-slide-in' : ''
+                    }`}
+                    style={{
+                      opacity: index === 0 ? 0 : 1,
+                      animation: index === 0 ? 'slideIn 0.5s ease-out forwards' : 'none'
+                    }}
+                  >
+                    <p className="text-amber-900 italic text-sm flex-1">{comment.commentary}</p>
+                    {(comment.audioUrl || comment.audioUrls) && (
+                      <button 
+                        onClick={() => playAudioManually(comment)}
+                        className="text-amber-600 hover:text-amber-800 transition-colors flex-shrink-0"
+                        aria-label="Play audio"
+                      >
+                        🔊
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }

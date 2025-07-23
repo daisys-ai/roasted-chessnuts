@@ -35,3 +35,11 @@ body {
     transform: translateY(0);
   }
 }
+
+/* Mobile-specific styles for chess board responsiveness */
+@media (max-width: 640px) {
+  /* Ensure the chess board scales down on very small screens */
+  .chess-board {
+    max-width: 100% !important;
+  }
+}
