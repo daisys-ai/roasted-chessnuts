@@ -198,7 +198,16 @@ export function useDaisysWebSocket(voiceId: string) {
           '/api/websocket-url-text',
           {
             onconnectionstatus: (status: string) => {
-              setIsConnected(status.toLowerCase().includes('connected'));
+              const isConnected = status.toLowerCase().includes('connected');
+              setIsConnected(isConnected);
+              
+              if (!isConnected && status.toLowerCase().includes('error')) {
+                console.error('WebSocket connection error:', status);
+              }
+            },
+            onerror: (error: any) => {
+              console.error('WebSocket error:', error);
+              setIsConnected(false);
             }
           }
         );
@@ -272,12 +281,30 @@ export function useDaisysWebSocket(voiceId: string) {
       
       try {
         let firstChunk = true;
+        
         // Process the stream
         for await (const [info, prefix, audio] of messageStream) {
           // Handle status messages
           if (info) {
             if (info.data?.status === 'error') {
-              console.error(`TTS Error:`, info.data);
+              console.error(`Daisys Error:`, info.data);
+              
+              // Still call onStart callback even if TTS fails
+              // This ensures the commentary is displayed
+              if (firstChunk && onAudioStartRef.current) {
+                onAudioStartRef.current();
+                onAudioStartRef.current = null;
+                firstChunk = false;
+              }
+              
+              // Since TTS failed, we should call onEnd immediately if it exists
+              // This is important for human moves to ensure the computer moves next
+              if (onAudioEndRef.current) {
+                console.log('Calling onEnd immediately due to TTS error');
+                onAudioEndRef.current();
+                onAudioEndRef.current = null;
+              }
+              
               break;
             }
           }

@@ -254,6 +254,14 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
                               return updated;
                             });
                           }
+                        }).catch(error => {
+                          console.error('TTS playback failed:', error);
+                          // Still display the commentary even if TTS fails
+                          if (pendingCommentaryRef.current) {
+                            const commentary = pendingCommentaryRef.current;
+                            pendingCommentaryRef.current = null;
+                            setCommentary(prev => [commentary, ...prev]);
+                          }
                         });
                       }
                     } else if (data.type === 'error') {
@@ -328,6 +336,14 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
                   }
                   return updated;
                 });
+              }
+            }).catch(error => {
+              console.error('TTS playback failed:', error);
+              // Still display the commentary even if TTS fails
+              if (pendingCommentaryRef.current) {
+                const commentary = pendingCommentaryRef.current;
+                pendingCommentaryRef.current = null;
+                setCommentary(prev => [commentary, ...prev]);
               }
             });
           } else {
