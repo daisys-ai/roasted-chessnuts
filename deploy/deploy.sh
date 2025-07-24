@@ -92,7 +92,7 @@ aws ecr put-lifecycle-policy \
 # Step 2: Build and push Docker image
 echo "🐳 Building Docker image..."
 cd "$PROJECT_ROOT"
-docker build -t roasted-chessnuts:latest .
+docker build --build-arg BUILD_MODE=production -t roasted-chessnuts:latest .
 
 # Login to ECR
 echo "Logging in to ECR..."

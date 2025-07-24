@@ -14,9 +14,19 @@ COPY postcss.config.mjs ./
 COPY src/ ./src/
 COPY public/ ./public/
 
-# Build the frontend
-RUN npm run build
-RUN npm run export || npx next export || echo "Export not configured"
+# Build argument to control build mode
+ARG BUILD_MODE=production
+
+# Conditionally build the frontend based on BUILD_MODE
+RUN if [ "$BUILD_MODE" = "production" ]; then \
+        echo "Building frontend for production..." && \
+        npm run build && \
+        (npm run export || npx next export || echo "Export not configured"); \
+    else \
+        echo "Skipping frontend build for development mode" && \
+        mkdir -p out && \
+        echo '<!DOCTYPE html><html><body><h1>Development Mode</h1><p>Run npm run dev for frontend development</p></body></html>' > out/index.html; \
+    fi
 
 # Final stage with Python backend
 FROM python:3.11-slim

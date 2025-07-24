@@ -197,8 +197,10 @@ async def process_move_stream(move_request: MoveRequest):
             
             # Different prompts for computer vs human
             if move_request.player == "computer":
+                logger.info('computer move')
                 system_prompt = "Describe computer's chess move in ONE short sentence (max 10 words). Be a bit patronizing to the human, or mock the AI if a bad move. Be savage."
             else:  # human
+                logger.info('human move')
                 system_prompt = "Roast this chess move in ONE short sentence (max 10 words). Be savage, no pleasantries. Relevant to the position, referencing games, openings, defenses, gambits, but be hilariously critical."
             
             # Stream the response

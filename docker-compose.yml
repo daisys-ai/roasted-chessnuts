@@ -1,12 +1,49 @@
 version: '3.8'
 
 services:
+  # Backend service for development
   app:
-    build: .
-    ports:
-      - "8000:8000"
+    build:
+      context: .
+      args:
+        BUILD_MODE: development
+    volumes:
+      - ./backend:/app
+      - ./.env:/app/.env
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--log-level", "debug"]
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-    restart: unless-stopped
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+
+  # Frontend service for development
+  frontend:
+    build:
+      context: .
+      target: frontend-builder
+    working_dir: /app
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./next.config.ts:/app/next.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./postcss.config.mjs:/app/postcss.config.mjs
+      - ./.env:/app/.env
+    command: npm run dev
+    environment:
+      - NEXT_PUBLIC_API_URL=
+    depends_on:
+      - app
+
+  # Nginx proxy for development
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+      - frontend
