@@ -147,7 +147,11 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
               fen: game.fen(),
               move: move,
               player: player,
-              moveHistory: moveHistory
+              moveHistory: moveHistory,
+              isGameOver: game.isGameOver(),
+              isCheckmate: game.isCheckmate(),
+              isDraw: game.isDraw(),
+              isStalemate: game.isStalemate()
             })
           });
         
@@ -257,7 +261,11 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
         fen: game.fen(),
         move: move,
         player: player,
-        moveHistory: moveHistory
+        moveHistory: moveHistory,
+        isGameOver: game.isGameOver(),
+        isCheckmate: game.isCheckmate(),
+        isDraw: game.isDraw(),
+        isStalemate: game.isStalemate()
       }, {
         timeout: 30000  // Increase timeout to 30 seconds
       });

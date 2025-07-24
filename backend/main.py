@@ -97,6 +97,31 @@ class MoveRequest(BaseModel):
     move: str
     player: str  # "human" or "computer"
     moveHistory: list[str]
+    isGameOver: bool = False
+    isCheckmate: bool = False
+    isDraw: bool = False
+    isStalemate: bool = False
+    
+    def get_system_prompt(self) -> str:
+        """Get the appropriate system prompt based on game state and player."""
+        # Common instruction for all prompts
+        common_instruction = " If you mention the move, wrap in a tag and uppercase, example <acronym>bg6</acronym>, but don't always mention it."
+        
+        if self.isCheckmate:
+            if self.player == "computer":
+                base_prompt = "The computer has checkmated the human! In ONE short sentence (max 10 words), gloat about the AI's victory. Be smug and superior."
+            else:  # human
+                base_prompt = "The human actually won by checkmate! In ONE short sentence (max 10 words), express shock and disbelief at this rare event. Be dramatically surprised."
+        elif self.isStalemate:
+            base_prompt = "Stalemate! In ONE short sentence (max 10 words), mock both players for this boring draw. Be sarcastic about the anticlimax."
+        elif self.isDraw:
+            base_prompt = "It's a draw! In ONE short sentence (max 10 words), express disappointment at this cowardly result. Mock the lack of fighting spirit."
+        elif self.player == "computer":
+            base_prompt = "You are computer, this is your chess move in ONE short sentence (max 10 words). Be a bit patronizing to human. Be savage depending on severity of mistakes."
+        else:  # human
+            base_prompt = "Roast this chess move in ONE short sentence (max 10 words). Be savage, no pleasantries. Relevant to the position, referencing games, openings, defenses, gambits, but be hilariously critical."
+        
+        return base_prompt + common_instruction
 
 class CommentaryResponse(BaseModel):
     commentary: str
@@ -195,13 +220,18 @@ async def process_move_stream(move_request: MoveRequest):
             sentence_count = 0
             full_commentary = ""
             
-            # Different prompts for computer vs human
-            if move_request.player == "computer":
-                logger.info('computer move')
-                system_prompt = "Describe computer's chess move in ONE short sentence (max 10 words). Be a bit patronizing to the human, or mock the AI if a bad move. Be savage."
-            else:  # human
-                logger.info('human move')
-                system_prompt = "Roast this chess move in ONE short sentence (max 10 words). Be savage, no pleasantries. Relevant to the position, referencing games, openings, defenses, gambits, but be hilariously critical."
+            # Get appropriate prompt based on game state
+            system_prompt = move_request.get_system_prompt()
+            
+            # Log game state for debugging
+            if move_request.isCheckmate:
+                logger.info(f'{move_request.player} wins by checkmate')
+            elif move_request.isStalemate:
+                logger.info('game ends in stalemate')
+            elif move_request.isDraw:
+                logger.info('game ends in draw')
+            else:
+                logger.info(f'{move_request.player} move')
             
             # Stream the response
             response = await litellm.acompletion(
