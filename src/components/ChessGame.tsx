@@ -32,6 +32,7 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
   const hasPlayedRef = useRef<Set<string>>(new Set());
   const [wsStatus, setWsStatus] = useState('');
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [gameStarted, setGameStarted] = useState(false);
   const pendingCommentaryRef = useRef<Commentary | null>(null);
 
   // WebSocket audio hook - always called to satisfy React's rules
@@ -356,6 +357,11 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
   function onDrop(sourceSquare: string, targetSquare: string, piece?: string) {
     // Removed verbose logging
     
+    // Ensure game is started
+    if (!gameStarted) {
+      setGameStarted(true);
+    }
+    
     // This is a user interaction, so we can now safely play audio
     if (audioBlocked) {
       setAudioBlocked(false);
@@ -487,15 +493,24 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
       {/* Chess Board */}
       <div className="w-full lg:w-1/2 flex items-start justify-center lg:justify-end">
         <div className="w-full max-w-[90vw] sm:max-w-[500px] bg-amber-100 p-4 rounded-lg shadow-2xl">
-          <div className="bg-amber-50 p-2 rounded-lg">
+          <div 
+            className="bg-amber-50 p-2 rounded-lg relative"
+            onClick={() => {
+              if (!gameStarted) {
+                setGameStarted(true);
+              }
+            }}
+          >
             <Chessboard 
               id="RoastedChessnutsBoard"
               position={game.fen()} 
               onPieceDrop={onDrop}
-              arePiecesDraggable={!isThinking && (!USE_WEBSOCKET_AUDIO || wsAudio?.isConnected)}
+              arePiecesDraggable={gameStarted && !isThinking && (!USE_WEBSOCKET_AUDIO || wsAudio?.isConnected)}
               customBoardStyle={{
                 borderRadius: '8px',
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                filter: !gameStarted ? 'brightness(0.6)' : 'none',
+                transition: 'filter 0.3s ease',
               }}
             />
           </div>
@@ -506,6 +521,9 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
               onClick={(e) => {
                 console.log('New Game button clicked');
                 e.preventDefault();
+                if (!gameStarted) {
+                  setGameStarted(true);
+                }
                 resetGame();
               }}
               className="px-4 py-2 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors font-semibold shadow-lg cursor-pointer text-sm"
