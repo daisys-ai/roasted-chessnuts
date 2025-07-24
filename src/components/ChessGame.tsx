@@ -17,6 +17,26 @@ interface Commentary {
 const USE_WEBSOCKET_AUDIO = true; // Set to true to enable WebSocket streaming
 const USE_STREAMING_COMMENTARY = true; // Enable sentence-by-sentence streaming
 
+// Helper function to strip acronym tags from commentary
+function stripAcronymTags(text: string): string {
+  return text.replace(/<acronym>/g, '').replace(/<\/acronym>/g, '');
+}
+
+// Helper function to process text for TTS
+function processForTTS(text: string): string {
+  // Downcase the entire text first
+  const lowercasedText = text.toLowerCase();
+  
+  // Replace acronym tag contents with uppercase version and add breaks between letters
+  return lowercasedText.replace(/<acronym>(.*?)<\/acronym>/gi, (match, content) => {
+    // Filter out < and > characters, then convert to uppercase and split into individual letters
+    const letters = content.replace(/[<>]/g, '').toUpperCase().split('');
+    // Join with <break/> tags between each letter for better TTS pronunciation
+    const spaced = letters.join('<break/>');
+    return `<say-as interpret-as="spell-out">${spaced}</say-as>`;
+  });
+}
+
 function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
   const [Chessboard, setChessboard] = useState<any>(null);
   const [game, setGame] = useState(() => new Chess());
@@ -219,7 +239,7 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
                         const onAudioEnd = player === 'human' && (window as any).__audioEndHandler ? 
                           (window as any).__audioEndHandler : null;
                         
-                        wsAudio.playText(fullCommentary, onAudioStart, onAudioEnd).then(commentId => {
+                        wsAudio.playText(processForTTS(fullCommentary), onAudioStart, onAudioEnd).then(commentId => {
                           if (commentId) {
                             // Update the commentary with the comment ID
                             setCommentary(prev => {
@@ -294,7 +314,7 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
             (window as any).__audioEndHandler : null;
           
           if (newCommentary && newCommentary.commentary) {
-            wsAudio.playText(newCommentary.commentary, onAudioStart, onAudioEnd).then(commentId => {
+            wsAudio.playText(processForTTS(newCommentary.commentary), onAudioStart, onAudioEnd).then(commentId => {
               if (commentId) {
                 // Update the commentary with the comment ID
                 setCommentary(prev => {
@@ -589,14 +609,14 @@ function ChessGameWithVoice({ voiceId }: { voiceId: string }) {
                       animation: index === 0 ? 'slideIn 0.5s ease-out forwards' : 'none'
                     }}
                   >
-                    <p className="text-amber-900 italic text-sm flex-1">{comment.commentary}</p>
+                    <p className="text-amber-900 italic text-sm flex-1">{stripAcronymTags(comment.commentary)}</p>
                     {USE_WEBSOCKET_AUDIO && wsAudio ? (
                       <button 
                         onClick={() => {
                           if (comment.commentId && wsAudio.hasSavedAudio(comment.commentId)) {
                             wsAudio.playSavedAudio(comment.commentId);
                           } else if (wsAudio.isConnected) {
-                            wsAudio.playText(comment.commentary);
+                            wsAudio.playText(processForTTS(comment.commentary));
                           }
                         }}
                         className="text-amber-600 hover:text-amber-800 transition-colors flex-shrink-0"
